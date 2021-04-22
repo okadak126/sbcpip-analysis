@@ -177,6 +177,6 @@ ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=CDU.CLIN.DEC.UNIT, col='CDU.CLIN.DEC.UNIT')) + 
   geom_line(mapping=aes(x=date, y=seven_lag, col='seven_lag')) 
 
-# Lambda
+# Lambda (this is 0 for the whole range)
 ggplot(data=coef.tbl) + geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
 
