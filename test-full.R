@@ -57,6 +57,7 @@ for (i in seq_along(all_pred_dates)) {
   prediction <- rbind(prediction,result)
 }
 ggplot(data=prediction) + geom_line(aes(x=date, y=t_pred))
+prediction
 
 # Retrieve true transfusion data from the files (this fetches data from all files in folder)
 process_all_transfusion_files_no_reports <- function(data_folder,
@@ -180,3 +181,22 @@ ggplot(data=coef.tbl) +
 # Lambda (this is 0 for the whole range)
 ggplot(data=coef.tbl) + geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
 
+# Full dataset generation
+pred_inputs <- list(cbc = NULL, census = NULL, transfusion = NULL, inventory = NULL)
+all_pred_dates <- seq.Date(from = pred_start_date, to = pred_end_date, by = 1)
+all_pred_dates
+for (i in seq_along(all_pred_dates)) {
+  date_str <- as.character(all_pred_dates[i])
+  print(date_str)
+  inputs_single_day <- process_data_for_date(config = config, date = date_str)
+  pred_inputs$cbc %<>% rbind(inputs_single_day$cbc)
+  pred_inputs$census %<>% rbind(inputs_single_day$census)
+  pred_inputs$transfusion %<>% rbind(inputs_single_day$transfusion)
+  pred_inputs$inventory %<>% rbind(inputs_single_day$inventory)
+}
+full_dataset <- create_cbc_features(pred_inputs$cbc, config$cbc_quantiles)
+pred_inputs$inventory$date %<>% as.Date()
+full_dataset %>% left_join(pred_inputs$census, by="date") %>% 
+  left_join(pred_inputs$transfusion, by="date") %>%
+  left_join(pred_inputs$inventory, by="date") -> full_dataset
+full_dataset %<>% left_join(prediction, by="date")
