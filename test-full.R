@@ -169,7 +169,7 @@ ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y= H1, col='H1')) + 
   geom_line(mapping=aes(x=date, y= H2, col='H2'))
 
-# Miscellaneous Series
+# Miscellaneous Series (what do these variables mean?)
 ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=EMERGENCY.DEPARTMENT, col='EMERGENCY.DEPARTMENT')) + 
   geom_line(mapping=aes(x=date, y=CAPR.XFER.OVERFL, col='CAPR.XFER.OVERFL')) +
