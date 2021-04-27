@@ -8,6 +8,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyverse)
 library(magrittr)
+library(reshape2)
 options(warn = 1)
 
 set_config_param(param = "output_folder",
@@ -26,11 +27,11 @@ config$history_window <- 200
 
 # Predict 106 days out from January 1, 2019
 pred_start_date <- as.Date("2019-01-01")
-pred_end_date <- pred_start_date + 104
+pred_end_date <- pred_start_date + 380
 seed_start_date <- pred_start_date - 201
 seed_end_date <- pred_start_date - 1
 all_seed_dates <- seq.Date(from = seed_start_date, to = seed_end_date, by = 1)
-
+pred_end_date
 # Process Seed Data over specified date range
 # (This likely will not work on files that contain information for multiple days - pre 4/2018)
 seed_data <- list(cbc = NULL, census = NULL, transfusion = NULL, inventory = NULL)
@@ -115,20 +116,21 @@ for (i in seq(1, length(output_files), 7)) {
 coef.df <- data.frame(model_coefs)
 
 # Plot time-varying coefficients by week (Lambda is 0 between these dates)
-all_coef_dates <- seq.Date(from = pred_start_date, to = pred_end_date, by = 7)
+all_coef_dates <- seq.Date(from = pred_start_date, to = pred_start_date + 362, by = 7)
 coef.df$date = all_coef_dates
 coef.tbl <- as.tibble(coef.df)
 coef.tbl %>% relocate(date) -> coef.tbl
 coef.tbl %>% filter(date < as.Date("2019-11-10") & date > as.Date("2019-06-01"))
 
-# Day of Week series
+# (Important) Day of Week series
 ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=Sun, col='Sun')) + 
   geom_line(mapping=aes(x=date, y=Mon, col='Mon')) + 
   geom_line(mapping=aes(x=date, y=Tue, col='Tue')) +
   geom_line(mapping=aes(x=date, y=Wed, col='Wed')) + 
   geom_line(mapping=aes(x=date, y=Thu, col='Thu')) + 
-  geom_line(mapping=aes(x=date, y=Fri, col='Fri'))
+  geom_line(mapping=aes(x=date, y=Fri, col='Fri')) + 
+  geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
 
 # Nq Series
 ggplot(data=coef.tbl) +
@@ -162,13 +164,16 @@ ggplot(data=coef.tbl) +
 # FGH series
 ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=EMERGENCY.DEPARTMENT, col='EMERGENCY.DEPARTMENT')) + 
+  geom_line(mapping=aes(x=date, y=D1CC, col='D1CC')) +
   geom_line(mapping=aes(x=date, y=F3, col='F3')) +
   geom_line(mapping=aes(x=date, y=FGR, col='FGR')) + 
   geom_line(mapping=aes(x=date, y=G1, col='G1')) + 
+  geom_line(mapping=aes(x=date, y= E3, col='E3')) + 
   geom_line(mapping=aes(x=date, y= G2P, col='G2P')) + 
   geom_line(mapping=aes(x=date, y= G2S, col='G2S')) + 
   geom_line(mapping=aes(x=date, y= H1, col='H1')) + 
-  geom_line(mapping=aes(x=date, y= H2, col='H2'))
+  geom_line(mapping=aes(x=date, y= H2, col='H2')) + 
+  geom_vline(xintercept = c(as.Date("2019-05-13"), as.Date("2019-05-15")))
 
 # Miscellaneous Series (what do these variables mean?)
 ggplot(data=coef.tbl) +
@@ -182,6 +187,8 @@ ggplot(data=coef.tbl) +
 ggplot(data=coef.tbl) + geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
 
 # Full dataset generation
+pred_start_date <- as.Date("2019-01-01")
+pred_end_date <- pred_start_date + 358
 pred_inputs <- list(cbc = NULL, census = NULL, transfusion = NULL, inventory = NULL)
 all_pred_dates <- seq.Date(from = pred_start_date, to = pred_end_date, by = 1)
 all_pred_dates
@@ -200,3 +207,67 @@ full_dataset %>% left_join(pred_inputs$census, by="date") %>%
   left_join(pred_inputs$transfusion, by="date") %>%
   left_join(pred_inputs$inventory, by="date") -> full_dataset
 full_dataset %<>% left_join(prediction, by="date")
+
+# See which features varied the most over time and plot its values
+devs <- sapply(data.frame(full_dataset %>% select(-t_pred) %>% filter(date != as.Date("2019-05-13") & date != as.Date("2019-05-15"))), function(x) sd(x))
+sorted.devs <- sort(devs, decreasing=TRUE) 
+var.features <- names(sorted.devs[2:7])
+var.features.long <- reshape2::melt(full_dataset, id = "date", measure = var.features )
+ggplot(var.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
+
+# Second most "varying" group of features.
+var2.features<- names(sorted.devs[9:15])
+var2.features[3] <- names(sorted.devs[17])
+var2.features
+var2.features.long <- reshape2::melt(full_dataset, id = "date", measure = var2.features )
+ggplot(var2.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
+
+# Features that vary the least over the prediction period
+nonvar.features <- names(sorted.devs[(length(sorted.devs) - 5):length(sorted.devs)])
+nonvar.features[4] = 'CAPR XFER OVERFL'
+nonvar.features.long <- reshape2::melt(full_dataset, id = "date", measure = nonvar.features )
+ggplot(nonvar.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
+
+# Look at correlation of with day of week using Chi-square (is there a better method?)
+full_dataset %<>% mutate(dow = weekdays(date))
+chisqs.dow <- sapply(full_dataset %>% select(-t_pred), function(x) chisq.test(full_dataset$dow, x, simulate.p.value = TRUE)$p.value)
+sorted.chisqs <- sort(chisqs.dow, decreasing = TRUE)
+sorted.chisqs
+noncor.features <- names(sorted.chisqs[1:10])
+noncor.features
+noncor.features.long <- reshape2::melt(full_dataset, id = "date", measure = noncor.features )
+ggplot(noncor.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
+
+
+# Isolate problem areas
+full_dataset %>% filter(date > as.Date("2019-11-14")) -> full_dataset_problem
+
+
+# Plots illustrating strange behavior in November 2019
+zeroed.vars <- c('EMERGENCY DEPARTMENT', 'CAPR XFER OVERFL', 'CATH PACU', 'D1CC', 'G1', 'D1CS', 'D2', 'D3', 'DGR', 'E29-ICU', 'H1')
+dropped.vars <- c('E2-ICU', 'FGR', 'F3', 'E3', 'C3', 'C2', 'B3', 'E1', 'B1', 'B2')
+r.vars <- c('r1', 'r2', 'r3_plus')
+zeroed.features.long <- reshape2::melt(full_dataset, id = "date", measure = zeroed.vars)
+ggplot(zeroed.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-11-15")))
+
+dropped.features.long <-reshape2::melt(full_dataset, id = "date", measure = dropped.vars)
+ggplot(dropped.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-11-15")))
+
+r.features.long <-reshape2::melt(full_dataset, id = "date", measure = r.vars)
+ggplot(r.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-11-15")))
+
+other.vars <- setdiff(names(full_dataset), c(zeroed.vars, dropped.vars, r.vars, 'date'))
+other.features.long <-reshape2::melt(full_dataset, id = "date", measure = other.vars)
+ggplot(other.features.long, aes(date, value, colour = variable)) + geom_line() + 
+  geom_vline(xintercept=c(as.Date("2019-11-15"))) + 
+  geom_vline(xintercept = c(as.Date("2019-05-13"), as.Date("2019-05-15"))) + 
+  geom_vline(xintercept=c(as.Date("2019-05-24")))
+
+# Issue seems to be in Census files (sudden change from 11/17/2019 to 11/18/2019)
