@@ -11,6 +11,7 @@ library(magrittr)
 library(reshape2)
 options(warn = 1)
 
+# Set my params
 set_config_param(param = "output_folder",
                  value = "/Users/kaiokada/Desktop/Research/platelet_data_full/Blood_Center_Outputs")
 set_config_param(param = "log_folder",
@@ -25,13 +26,25 @@ config <- set_config_param(param = "data_folder",
 
 config$history_window <- 200
 
-# Predict 106 days out from January 1, 2019
-pred_start_date <- as.Date("2019-01-01")
-pred_end_date <- pred_start_date + 380
+# Predict 100 days out from June 19, 2020 (seed data from 200 days prior)
+pred_start_date <- as.Date("2020-06-19")
+pred_end_date <- pred_start_date + 100
+pred_end_date
 seed_start_date <- pred_start_date - 201
 seed_end_date <- pred_start_date - 1
 all_seed_dates <- seq.Date(from = seed_start_date, to = seed_end_date, by = 1)
-pred_end_date
+
+# In November 2019, Stanford Hospital underwent drastic changes in census locations,
+# We need to determine which of the new locations is the best proxy for requiring
+# blood transfusions. The pip code currently has a cap on 26 location variables, so I
+# only include new locations beginning with J and M (there are also K and L series, 
+# and M4 is missing)
+config$census_locations <- c("FGR", "E2-ICU", "C3", "E3",  "B3", "B2", "F3", 
+                             "C2", "E1", "B1", "H2", "VCP 3 WEST",
+                             "VCP 2 WEST", "VCP 1 WEST", "VCL SKILLED NURSING FACILITY", 
+                             "G2P", "G2S", "C1", "J2", "J4", "J5", "J6", "J7", "M5", "M6", "M7")
+config$census_locations
+
 # Process Seed Data over specified date range
 # (This likely will not work on files that contain information for multiple days - pre 4/2018)
 seed_data <- list(cbc = NULL, census = NULL, transfusion = NULL, inventory = NULL)
@@ -51,14 +64,14 @@ saveRDS(object = seed_data,
 
 # Predict for specified date range
 all_pred_dates <- seq.Date(from = pred_start_date, to = pred_end_date, by = 1)
+all_pred_dates
 prediction <- NULL
 for (i in seq_along(all_pred_dates)) {
   date_str <- as.character(all_pred_dates[i])
+  print(date_str)
   result <- predict_for_date(config = config, date = date_str)
   prediction <- rbind(prediction,result)
 }
-ggplot(data=prediction) + geom_line(aes(x=date, y=t_pred))
-prediction
 
 # Retrieve true transfusion data from the files (this fetches data from all files in folder)
 process_all_transfusion_files_no_reports <- function(data_folder,
@@ -86,20 +99,21 @@ prediction %>% left_join(plt_used_tbl, by="date") -> pred_and_true
 pred_and_true %>%
   mutate(dlead1 = lead(pred_and_true$d_true, 1)) %>%
   mutate(dlead2 = lead(pred_and_true$d_true, 2)) %>% 
-  mutate(t_true = d_true + dlead1 + dlead2) %>%
+  mutate(dlead3 = lead(pred_and_true$d_true, 3)) %>%
+  mutate(t_true = dlead1 + dlead2 + dlead3) %>%
   mutate(surplus = t_pred - t_true) -> pred_and_true
 pred_and_true %>% filter(is.na(t_true))
+pred_and_true <- pred_and_true[2:(nrow(pred_and_true)-2),] # remove NAs
 
-# Plots of predicted platelet usage vs. actual platelet usage, as well as "surplus"
-ggplot(data=pred_and_true[1:(nrow(pred_and_true)-2),]) + 
+# Plots of predicted platelet usage vs. actual platelet usage, to compare high level trends
+ggplot(data=pred_and_true[2:(nrow(pred_and_true)-2),]) + 
   geom_line(aes(x=date, y=t_pred)) + 
-  geom_line(aes(x=date, y=t_true))
-ggplot(data=pred_and_true[1:(nrow(pred_and_true)-2),]) + 
-  geom_line(aes(x=date, y=surplus)) 
+  geom_line(data=pred_and_true[1:(nrow(pred_and_true)-2),], aes(x=date, y=t_true)) +
+  geom_vline(xintercept=c(as.Date("2019-09-01")))
 
-# Attempt to generate prediction table (does not work - actually platelet usage returns NA )
+# Generate prediction table
 full_pred_table <- build_prediction_table(config, pred_start_date, pred_end_date)
-write.csv(full_pred_table, "predictions.csv")
+write.csv(full_pred_table, "predictions_2020.csv")
 
 # Collect model coefficients over all output files (only need one set per week)
 output_files <- list.files(path = config$output_folder,
@@ -113,23 +127,39 @@ for (i in seq(1, length(output_files), 7)) {
   model_coefs %>% rbind(c(d$model$coefs, lambda = d$model$lambda)) -> model_coefs
   print(paste("Added model coefs for day", i))
 }
+  
 coef.df <- data.frame(model_coefs)
+max(prediction$date)
 
 # Plot time-varying coefficients by week (Lambda is 0 between these dates)
-all_coef_dates <- seq.Date(from = pred_start_date, to = pred_start_date + 362, by = 7)
+all_coef_dates <- seq.Date(from = pred_start_date, to = pred_start_date + length(output_files) - 6, by = 7)
 coef.df$date = all_coef_dates
 coef.tbl <- as.tibble(coef.df)
 coef.tbl %>% relocate(date) -> coef.tbl
-coef.tbl %>% filter(date < as.Date("2019-11-10") & date > as.Date("2019-06-01"))
 
-# (Important) Day of Week series
+write.csv(coef.tbl, "coefs_2020.csv")
+coef.tbl
+
+# Plot Day of Week coefficient series
 ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=Sun, col='Sun')) + 
   geom_line(mapping=aes(x=date, y=Mon, col='Mon')) + 
   geom_line(mapping=aes(x=date, y=Tue, col='Tue')) +
   geom_line(mapping=aes(x=date, y=Wed, col='Wed')) + 
   geom_line(mapping=aes(x=date, y=Thu, col='Thu')) + 
-  geom_line(mapping=aes(x=date, y=Fri, col='Fri')) + 
+  geom_line(mapping=aes(x=date, y=Fri, col='Fri')) +
+  geom_line(mapping=aes(x=date, y=Sat, col='Sat'))
+
+# Check DOW coefficient magnitudes over time
+coef.tbl2 <- coef.tbl
+coef.tbl2[,!(colnames(coef.tbl) == "date")] <- abs(coef.tbl2[,!(colnames(coef.tbl) == "date")])
+coef.tbl2 %>% mutate(avg = (Mon + Tue + Wed + Thu + Fri + Sat + Sun) / 7) -> coef.tbl2
+ggplot(data=coef.tbl2) + 
+  geom_line(mapping=aes(x=date, y=avg, col='dow_avg'))
+
+# Check moving average of daily usage, lambda
+ggplot(data=coef.tbl) +
+  geom_line(mapping=aes(x=date, y=lag, col='lag')) +
   geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
 
 # Nq Series
@@ -140,58 +170,56 @@ ggplot(data=coef.tbl) +
   geom_line(mapping=aes(x=date, y=RDW_Nq, col='RDW_Nq')) + 
   geom_line(mapping=aes(x=date, y= WBC_Nq, col='WBC_Nq'))
 
-# B and C series
-ggplot(data=coef.tbl) +
-  geom_line(mapping=aes(x=date, y=B1, col='B1')) + 
-  geom_line(mapping=aes(x=date, y=B2, col='B2')) +
-  geom_line(mapping=aes(x=date, y=B3, col='B3')) + 
-  geom_line(mapping=aes(x=date, y=C1, col='C1')) + 
-  geom_line(mapping=aes(x=date, y= C2, col='C2')) + 
-  geom_line(mapping=aes(x=date, y= C3, col='C3'))
+# Census Series
+config$census_locations
 
-# D and E series
-ggplot(data=coef.tbl) +
-  geom_line(mapping=aes(x=date, y=D1CC, col='D1CC')) + 
-  geom_line(mapping=aes(x=date, y=D1CS, col='D1CS')) +
-  geom_line(mapping=aes(x=date, y=D2, col='D2')) + 
-  geom_line(mapping=aes(x=date, y=D3, col='D3')) + 
-  geom_line(mapping=aes(x=date, y= DGR, col='DGR')) + 
-  geom_line(mapping=aes(x=date, y= E1, col='E1')) + 
-  geom_line(mapping=aes(x=date, y= E2.ICU, col='E2.ICU')) + 
-  geom_line(mapping=aes(x=date, y= E29.ICU, col='E29.ICU')) + 
-  geom_line(mapping=aes(x=date, y= E3, col='E3'))
+# The below code would be more convenient, but unfortunately census locations that
+# contain spaces and other special characters are modified such that the character
+# is replaced by "."
 
-# FGH series
+# df <- tidyr::gather(coef.tbl, type, value, config$census_locations)
+# ggplot(df, aes(date, value, color = type)) + geom_line() +
+
+# Plotting census locations in groups of 6 for clarity
 ggplot(data=coef.tbl) +
-  geom_line(mapping=aes(x=date, y=EMERGENCY.DEPARTMENT, col='EMERGENCY.DEPARTMENT')) + 
-  geom_line(mapping=aes(x=date, y=D1CC, col='D1CC')) +
-  geom_line(mapping=aes(x=date, y=F3, col='F3')) +
   geom_line(mapping=aes(x=date, y=FGR, col='FGR')) + 
-  geom_line(mapping=aes(x=date, y=G1, col='G1')) + 
-  geom_line(mapping=aes(x=date, y= E3, col='E3')) + 
-  geom_line(mapping=aes(x=date, y= G2P, col='G2P')) + 
-  geom_line(mapping=aes(x=date, y= G2S, col='G2S')) + 
-  geom_line(mapping=aes(x=date, y= H1, col='H1')) + 
-  geom_line(mapping=aes(x=date, y= H2, col='H2')) + 
-  geom_vline(xintercept = c(as.Date("2019-05-13"), as.Date("2019-05-15")))
+  geom_line(mapping=aes(x=date, y=E2.ICU, col='E2.ICU')) +
+  geom_line(mapping=aes(x=date, y=C3, col='C3')) + 
+  geom_line(mapping=aes(x=date, y=E3, col='E3')) + 
+  geom_line(mapping=aes(x=date, y=B3, col='B3')) + 
+  geom_line(mapping=aes(x=date, y=B2, col='B2'))
 
-# Miscellaneous Series (what do these variables mean?)
 ggplot(data=coef.tbl) +
-  geom_line(mapping=aes(x=date, y=EMERGENCY.DEPARTMENT, col='EMERGENCY.DEPARTMENT')) + 
-  geom_line(mapping=aes(x=date, y=CAPR.XFER.OVERFL, col='CAPR.XFER.OVERFL')) +
-  geom_line(mapping=aes(x=date, y=CATH.PACU, col='CATH.PACU')) + 
-  geom_line(mapping=aes(x=date, y=CDU.CLIN.DEC.UNIT, col='CDU.CLIN.DEC.UNIT')) + 
-  geom_line(mapping=aes(x=date, y=seven_lag, col='seven_lag')) 
+  geom_line(mapping=aes(x=date, y=F3, col='F3')) + 
+  geom_line(mapping=aes(x=date, y=C2, col='C2')) +
+  geom_line(mapping=aes(x=date, y=E1, col='E1')) + 
+  geom_line(mapping=aes(x=date, y=B1, col='B1')) + 
+  geom_line(mapping=aes(x=date, y=H2, col='H2')) + 
+  geom_line(mapping=aes(x=date, y=VCP.3.WEST, col='VCP.3.West'))
 
-# Lambda (this is 0 for the whole range)
-ggplot(data=coef.tbl) + geom_line(mapping=aes(x=date, y=lambda, col='lambda'))
+ggplot(data=coef.tbl) +
+  geom_line(mapping=aes(x=date, y=VCP.2.WEST, col='VCP.2.West')) + 
+  geom_line(mapping=aes(x=date, y=VCP.1.WEST, col='VCP.1.West')) +
+  geom_line(mapping=aes(x=date, y=VCL.SKILLED.NURSING.FACILITY, col='VCL.Skilled.Nursing.Facility')) + 
+  geom_line(mapping=aes(x=date, y=G2P, col='G2P')) + 
+  geom_line(mapping=aes(x=date, y=G2S, col='G2S')) + 
+  geom_line(mapping=aes(x=date, y=C1, col='C1'))
+
+ggplot(data=coef.tbl) +
+  geom_line(mapping=aes(x=date, y=J2, col='J2')) + 
+  geom_line(mapping=aes(x=date, y=J4, col='J4')) +
+  geom_line(mapping=aes(x=date, y=J5, col='J5')) + 
+  geom_line(mapping=aes(x=date, y=J6, col='J6')) + 
+  geom_line(mapping=aes(x=date, y=J7, col='J7')) + 
+  geom_line(mapping=aes(x=date, y=M5, col='M5')) + 
+  geom_line(mapping=aes(x=date, y=M6, col='M6')) + 
+  geom_line(mapping=aes(x=date, y=M7, col='M7')) 
 
 # Full dataset generation
-pred_start_date <- as.Date("2019-01-01")
-pred_end_date <- pred_start_date + 358
 pred_inputs <- list(cbc = NULL, census = NULL, transfusion = NULL, inventory = NULL)
+pred_start_date
+pred_end_date
 all_pred_dates <- seq.Date(from = pred_start_date, to = pred_end_date, by = 1)
-all_pred_dates
 for (i in seq_along(all_pred_dates)) {
   date_str <- as.character(all_pred_dates[i])
   print(date_str)
@@ -208,29 +236,14 @@ full_dataset %>% left_join(pred_inputs$census, by="date") %>%
   left_join(pred_inputs$inventory, by="date") -> full_dataset
 full_dataset %<>% left_join(prediction, by="date")
 
-# See which features varied the most over time and plot its values
-devs <- sapply(data.frame(full_dataset %>% select(-t_pred) %>% filter(date != as.Date("2019-05-13") & date != as.Date("2019-05-15"))), function(x) sd(x))
-sorted.devs <- sort(devs, decreasing=TRUE) 
-var.features <- names(sorted.devs[2:7])
-var.features.long <- reshape2::melt(full_dataset, id = "date", measure = var.features )
-ggplot(var.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
+ggplot(data=full_dataset) +
+  geom_line(mapping=aes(x=date, y=t_pred, col='t_pred')) + geom_vline(xintercept=as.Date("2019-05-13"))
 
-# Second most "varying" group of features.
-var2.features<- names(sorted.devs[9:15])
-var2.features[3] <- names(sorted.devs[17])
-var2.features
-var2.features.long <- reshape2::melt(full_dataset, id = "date", measure = var2.features )
-ggplot(var2.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
-
-# Features that vary the least over the prediction period
-nonvar.features <- names(sorted.devs[(length(sorted.devs) - 5):length(sorted.devs)])
-nonvar.features[4] = 'CAPR XFER OVERFL'
-nonvar.features.long <- reshape2::melt(full_dataset, id = "date", measure = nonvar.features )
-ggplot(nonvar.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
-
+# Should mimic actual dataset generation more closely
+full_dataset %>% distinct() %>%
+  dplyr::rename(plt_used = .data$used) %>%
+  dplyr::mutate(lag = ma(.data$plt_used, window_size = 7L)) -> full_dataset #%>%
+  
 # Look at correlation of with day of week using Chi-square (is there a better method?)
 full_dataset %<>% mutate(dow = weekdays(date))
 chisqs.dow <- sapply(full_dataset %>% select(-t_pred), function(x) chisq.test(full_dataset$dow, x, simulate.p.value = TRUE)$p.value)
@@ -241,33 +254,3 @@ noncor.features
 noncor.features.long <- reshape2::melt(full_dataset, id = "date", measure = noncor.features )
 ggplot(noncor.features.long, aes(date, value, colour = variable)) + geom_line() + 
   geom_vline(xintercept=c(as.Date("2019-04-15"), as.Date("2019-05-13"), as.Date("2019-05-15"), as.Date("2019-05-24")))
-
-
-# Isolate problem areas
-full_dataset %>% filter(date > as.Date("2019-11-14")) -> full_dataset_problem
-
-
-# Plots illustrating strange behavior in November 2019
-zeroed.vars <- c('EMERGENCY DEPARTMENT', 'CAPR XFER OVERFL', 'CATH PACU', 'D1CC', 'G1', 'D1CS', 'D2', 'D3', 'DGR', 'E29-ICU', 'H1')
-dropped.vars <- c('E2-ICU', 'FGR', 'F3', 'E3', 'C3', 'C2', 'B3', 'E1', 'B1', 'B2')
-r.vars <- c('r1', 'r2', 'r3_plus')
-zeroed.features.long <- reshape2::melt(full_dataset, id = "date", measure = zeroed.vars)
-ggplot(zeroed.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-11-15")))
-
-dropped.features.long <-reshape2::melt(full_dataset, id = "date", measure = dropped.vars)
-ggplot(dropped.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-11-15")))
-
-r.features.long <-reshape2::melt(full_dataset, id = "date", measure = r.vars)
-ggplot(r.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-11-15")))
-
-other.vars <- setdiff(names(full_dataset), c(zeroed.vars, dropped.vars, r.vars, 'date'))
-other.features.long <-reshape2::melt(full_dataset, id = "date", measure = other.vars)
-ggplot(other.features.long, aes(date, value, colour = variable)) + geom_line() + 
-  geom_vline(xintercept=c(as.Date("2019-11-15"))) + 
-  geom_vline(xintercept = c(as.Date("2019-05-13"), as.Date("2019-05-15"))) + 
-  geom_vline(xintercept=c(as.Date("2019-05-24")))
-
-# Issue seems to be in Census files (sudden change from 11/17/2019 to 11/18/2019)
